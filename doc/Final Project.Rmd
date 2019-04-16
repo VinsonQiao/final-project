@@ -1,0 +1,163 @@
+---
+title: "Final Project"
+author: "Wensong Qiao wq2144"
+date: "2019Äê4ÔÂ11ÈÕ"
+output: html_document
+---
+```{r}
+library(randomForest)
+library(e1071)
+library(gbm)
+```
+
+#Import Data
+```{r}
+Sys.setlocale('LC_ALL','C')
+sp500<-read.csv("C:/Users/qws/Documents/GitHub/final project/data/dataset.csv",header = TRUE,sep=",",encoding = "utf-8" )
+sp500<-sp500[,-1:-4]
+sp500<-sp500[,-2]
+```
+
+#Clean Data and Preprocessing
+```{r}
+#Get the return
+return<-NULL
+for (i in 2:length(sp500[,1])) {
+  
+  return[i]<-(sp500[i,1]-sp500[i-1,1])/sp500[i-1,1]
+}
+
+#Check "0" Value
+zero_check<-NULL
+for (i in 1:length(return)) {
+  zero_check[i]<-ifelse(return[i]==0,TRUE,FALSE)
+}
+sum(zero_check[-1])
+
+#Get the three classes--- up down or stationary
+Up_Down<-NULL 
+return<-return[-1]
+for (i in 1:length(return)) {
+  if(return[i]>0) {Up_Down[i]<-"Up"}
+  else if(return[i]<0) {Up_Down[i]<-"down"}
+  else {Up_Down[i]<-"stationary"}
+}
+
+sp500_new<-cbind(sp500[-1,],return,Up_Down)
+
+#Standardize Data
+sp500_new[,2:9]<-scale(sp500_new[,2:9],center=T,scale=T) 
+```
+
+#Feature Engineering
+```{r}
+#PCA (it may be useless,because we just have 8 festures)
+test.pr<-princomp(sp500_new[,2:9],cor=TRUE) 
+summary(test.pr,loadings=TRUE)
+screeplot(test.pr,type="lines")
+
+#Let's try the first four comps
+test.pr_new<-test.pr$scores[,1:4]
+data<-cbind(test.pr_new,sp500_new[,c(1,10,11)])
+```
+
+#Training and Testing Data (We can use K-fold cross validation further)
+```{r}
+#Choose 6000 samples as training data
+test<-data[round(runif(dim(data)[1]-6000,1,dim(data)[1]),0),]
+train<-data[-round(runif(dim(data)[1]-6000,1,dim(data)[1]),0),]
+```
+
+#Random Forest
+```{r}
+train_rf<-train[,-c(5,6)]
+test_rf<-test[,-c(5,6)]
+
+n<-length(names(train_rf))
+rate=1
+
+#Find the best mtry
+for (i in 1:(n-1)){
+  set.seed(1000)
+  rf_train<-randomForest(as.factor(train_rf$Up_Down)~.,data=train_rf,mtry=i,ntree=1000)
+  rate[i]<-mean( rf_train$err.rate)
+  print(rf_train)
+}
+plot(rate)
+rate
+
+#Find the best ntree
+set.seed(100)
+rf_train<-randomForest(as.factor(train_rf$Up_Down)~.,data=train_rf,mtry=3,ntree=1000)
+plot(rf_train)
+
+#Build model
+set.seed(120)
+rf_train<-randomForest(as.factor(train_rf$Up_Down)~.,data=train_rf,mtry=3,ntree=400)
+
+print(rf_train)
+
+#test
+pred<-predict(rf_train,newdata=test_rf)  
+pred_out_1<-predict(object=rf_train,newdata=test_rf,type="prob")
+table <- table(pred,test_rf$Up_Down)
+sum(diag(table))/sum(table)
+
+#Accuracy rate is too high ??? let's check again
+Check<-NULL
+for (i in 1:length(pred)) {
+  Check[i]<-pred[i]==test_rf$Up_Down[i]
+}
+RF_accuracy_rate<-sum(Check)/length(pred)
+
+#We may overfit,need K-fold CV in the future.
+```
+
+#SVM
+```{r}
+#SVM model
+train_svm<-train[,-c(5,7)]
+test_svm<-test[,-c(5,7)]
+svm.fit<-svm(train_svm$return~.,data=train_svm)
+summary(svm.fit)
+
+pred<-predict(svm.fit,newdata = test_svm)
+pred_New<-NULL
+
+for (i in 1:length(pred)) {
+  if(pred[i]>0) {pred_New[i]<-"Up"}
+  else if(pred[i]<0) {pred_New[i]<-"down"}
+  else {Up_Down[i]<-"stationary"}
+}
+
+#test
+table <- table(pred_New,test$Up_Down)
+SVM_accuracy_rate<-sum(diag(table))/sum(table)
+```
+
+#GBM
+```{r}
+train_gbm<-train[,-c(5,7)]
+test_gbm<-test[,-c(5,7)]
+gbm_model <-  gbm(formula = return ~ .,distribution = "gaussian",data = train_gbm,n.trees = 1000,interaction.depth = 7,shrinkage = 0.01,cv.folds=5)
+summary(gbm_model)
+#Choose the # of trees
+iter = gbm.perf(gbm_model,method = "cv")
+
+#Predict
+pred<-predict(gbm_model,newdata = test_gbm,n.trees = iter)
+for (i in 1:length(pred)) {
+  if(pred[i]>0) {pred_New[i]<-"Up"}
+  else if(pred[i]<0) {pred_New[i]<-"down"}
+  else {Up_Down[i]<-"stationary"}
+}
+
+#test
+table <- table(pred_New,test$Up_Down)
+GBM_accuracy_rate<-sum(diag(table))/sum(table)
+```
+
+#Final Result
+```{r}
+data.frame(RF_accuracy_rate,SVM_accuracy_rate,GBM_accuracy_rate)
+```
